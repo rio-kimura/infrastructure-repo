@@ -1,0 +1,63 @@
+# roles/backup/tasks/main.yml
+
+# -----------------------------------------------------
+# 1. サーバーB側でのアーカイブ準備
+# -----------------------------------------------------
+- name: "バックアップ用シェルスクリプトの配置"
+  ansible.builtin.template:
+    src: backup_volumes.sh.j2
+    dest: /usr/local/bin/backup_volumes.sh
+    mode: '0700' # rootのみ実行可能
+
+- name: "初回のバックアップアーカイブ強制生成"
+  ansible.builtin.command: /usr/local/bin/backup_volumes.sh
+  args:
+    creates: "/tmp/backup_latest.tar.gz" # ファイルが存在しない場合のみ実行
+
+- name: "Cronによる定期実行登録 (毎日03:00)"
+  ansible.builtin.cron:
+    name: "Nightly Docker Volume Backup"
+    hour: "3"
+    minute: "0"
+    job: "/usr/local/bin/backup_volumes.sh"
+
+# -----------------------------------------------------
+# 2. 司令塔（Server A）へのデータ回収
+# -----------------------------------------------------
+# 保存先ディレクトリの権限を、実行ユーザー(vagrant)が書き込めるよう修正
+- name: "Server A側の受け取り用ディレクトリ権限を修正"
+  ansible.builtin.file:
+    path: "/backup/server-b"
+    owner: vagrant
+    group: vagrant
+    mode: '0755'
+    state: directory
+  delegate_to: localhost  # server-a（司令塔）自身に対して実行
+  become: yes
+
+- name: "バックアップファイルをServer Aに回収"
+  ansible.builtin.fetch:
+    src: "/tmp/backup_latest.tar.gz"
+    dest: "/backup/server-b/{{ ansible_date_time.date }}.tar.gz"
+    flat: yes
+  register: fetch_result
+
+- name: "Server B側の転送済み一時ファイルを削除"
+  ansible.builtin.file:
+    path: "/tmp/backup_latest.tar.gz"
+    state: absent
+  when: fetch_result.changed
+
+# -----------------------------------------------------
+# 3. 通知ボットのDocker運用
+# -----------------------------------------------------
+- name: "通知ボットコンテナの起動 (Docker)"
+  community.docker.docker_container:
+    name: discord_notifier
+    image: python:3.9-slim
+    volumes:
+      - "/opt/discord-bot:/app:Z"
+    env:
+      DISCORD_WEBHOOK_URL: "{{ vault_discord_webhook_url }}"
+    state: started
+    restart_policy: unless-stopped

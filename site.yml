@@ -1,0 +1,59 @@
+# =================================================================
+# 卒業制作 インフラ構築自動化 マスタープレイブック (site.yml)
+# =================================================================
+
+# -----------------------------------------------------
+# 1. [最優先] Server A: バックアップ回収用ディレクトリの準備
+# -----------------------------------------------------
+- name: "Server A: バックアップ保存先の事前確保"
+  hosts: server-a
+  become: yes
+  tasks:
+    - name: "ルート直下のバックアップディレクトリ作成"
+      ansible.builtin.file:
+        path: "/backup"
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0755'
+
+    - name: "各サーバー用のサブディレクトリ作成"
+      ansible.builtin.file:
+        path: "/backup/{{ item }}"
+        state: directory
+        owner: vagrant
+        group: vagrant
+        mode: '0755'
+      loop:
+        - server-a
+        - server-b
+        - server-c
+
+# -----------------------------------------------------
+# 2. 全サーバー共通：基盤構築
+# -----------------------------------------------------
+- name: "全ノード共通基盤の構築 (Security/Monitor/Time)"
+  hosts: all
+  become: yes
+  roles:
+    - common  # SSH Port 22, Node Exporter, Chrony等の適用
+
+# -----------------------------------------------------
+# 3. Server B：アプリケーション実行環境
+# -----------------------------------------------------
+- name: "Server B: Docker実行環境とバックアップ設定"
+  hosts: server-b
+  become: yes
+  roles:
+    - docker  # Engine導入、SDK、app_network作成
+    - backup  # スクリプト配置、初回実行、fetchによる回収
+
+# -----------------------------------------------------
+# 4. Server C：監視管制塔 (Monitor Node)
+# -----------------------------------------------------
+- name: "Server C: 監視・通知システムの構築"
+  hosts: server-c
+  become: yes
+  roles:
+    - docker  # 【重要】通知ボット実行のために追加。chgrp docker エラーを防止
+    - monitor # Prometheus, Grafana, Discord Bot(Docker)

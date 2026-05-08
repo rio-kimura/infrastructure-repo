@@ -1,0 +1,29 @@
+# roles/security/tasks/main.yml
+
+- name: ufw をインストール
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: デフォルトポリシーの設定 (すべて拒否)
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: SSH接続を許可 (22番ポート)
+  community.general.ufw:
+    rule: allow
+    port: '22'
+    proto: tcp
+
+# 監視用ポートを Server C のIPからのみ許可する
+- name: 監視用ポート(9100)をServer Cからのみ許可
+  community.general.ufw:
+    rule: allow
+    port: '9100'
+    proto: tcp
+    from_ip: "{{ hostvars['server-c']['ansible_host'] }}"
+
+- name: ufw を有効化
+  community.general.ufw:
+    state: enabled

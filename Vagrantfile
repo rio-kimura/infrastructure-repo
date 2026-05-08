@@ -1,20 +1,20 @@
-# Vagrantfile
+# Vagrantfile (Infrastructure Preparation Mode)
 Vagrant.configure("2") do |config|
-  # 全台共通：AlmaLinux 9 を使用
+  # 全台共通：AlmaLinux 9
   config.vm.box = "almalinux/9"
 
-  # Server A: Control Node（司令塔）
+  # --- 1. Server A: Control Node (司令塔) ---
   config.vm.define "server-a" do |node|
     node.vm.network "private_network", ip: "10.149.245.110"
     node.vm.hostname = "server-a"
     node.vm.provider "virtualbox" do |vb|
-      vb.memory = "1024"
+      vb.memory = "2048"
       vb.cpus = 1
       vb.name = "server-a-ctrl"
     end
   end
 
-  # Server B: App/DB Node（実行環境）
+  # --- 2. Server B: App/DB Node ---
   config.vm.define "server-b" do |node|
     node.vm.network "private_network", ip: "10.149.245.115"
     node.vm.hostname = "server-b"
@@ -25,7 +25,7 @@ Vagrant.configure("2") do |config|
     end
   end
 
-  # Server C: Monitor Node（監視・通知）
+  # --- 3. Server C: Monitor Node ---
   config.vm.define "server-c" do |node|
     node.vm.network "private_network", ip: "10.149.245.116"
     node.vm.hostname = "server-c"
@@ -35,4 +35,7 @@ Vagrant.configure("2") do |config|
       vb.name = "server-c-mon"
     end
   end
+
+  # ※ 自動プロビジョニング(ansible_local)はすべて削除しました。
+  # サーバーが立ち上がった後、手動でServer Aを司令塔に設定します。
 end
