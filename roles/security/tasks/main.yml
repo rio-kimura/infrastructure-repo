@@ -1,3 +1,4 @@
+# roles/security/tasks/main.yml
 ---
 # =================================================================
 # 3. セキュリティ & 通信制御 (Firewalld / SELinux / SSH Hardening)
@@ -21,7 +22,7 @@
   poll: 0
 
 # ★ハングアップ対策：ネットワークが一瞬瞬断した後のSSHコネクション再確立を待つ
-- name: "Firewalld起動後の接続再確立を待機"
+- name: "Firewalld起動後の接続再確立を待期"
   ansible.builtin.wait_for_connection:
     delay: 2
     timeout: 60
@@ -41,12 +42,11 @@
         permanent: true
         state: enabled
         immediate: true
-      when: inventory_hostname in groups['app']
+      when: inventory_hostname == 'server-b'
 
 - name: "監視用ポート(9100)のリッチルール制限 (Server Cからの通信のみ許可)"
   ansible.posix.firewalld:
-    rich_rule: >
-      rule family="ipv4" source address="{{ hostvars['server-c'].ansible_host }}" port port="9100" protocol="tcp" accept
+    rich_rule: "rule family='ipv4' source address='{{ hostvars['server-c']['ansible_host'] }}' port port='9100' protocol='tcp' accept"
     permanent: true
     state: enabled
     immediate: true
