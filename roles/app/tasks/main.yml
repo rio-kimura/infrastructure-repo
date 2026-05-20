@@ -1,0 +1,77 @@
+---
+# =================================================================
+# 卒業制作 インフラ構築自動化 実行環境役割定義 (roles/app/tasks/main.yml)
+# =================================================================
+
+# -----------------------------------------------------
+# 1. DBデータ永続化の準備
+# -----------------------------------------------------
+- name: "DBデータ保存用ディレクトリの作成"
+  ansible.builtin.file:
+    path: /var/lib/mysql
+    state: directory
+    mode: '0755'
+    owner: root
+
+# -----------------------------------------------------
+# 2. MariaDBコンテナの展開 (Database)
+# -----------------------------------------------------
+# 【新規追加】MariaDBイメージの事前取得とネットワーク耐障害性の確保
+- name: "MariaDBコンテナイメージの事前取得（冪等性の担保）"
+  community.docker.docker_image:
+    name: "mariadb"
+    tag: "10.11"
+    source: pull
+    state: present
+  register: mariadb_pull_result
+  until: mariadb_pull_result is success
+  retries: 3
+  delay: 5
+
+- name: "MariaDBコンテナのビルドと起動"
+  community.docker.docker_container:
+    name: db_server
+    image: mariadb:10.11
+    state: started
+    restart_policy: unless-stopped
+    # 卒業制作スペックに基づくリソース制限
+    memory: 512M
+    cpus: 0.5
+    # ホストOSのSELinuxコンテキスト(:Z)を考慮したマウント
+    volumes:
+      - /var/lib/mysql:/var/lib/mysql:Z
+    # 機密情報は Ansible Vault (secrets.yml) から注入
+    env:
+      MARIADB_ROOT_PASSWORD: "{{ vault_db_root_password }}"
+      MARIADB_DATABASE: "grad_db"
+      TZ: "{{ common_timezone | default('Asia/Tokyo') }}"
+
+# -----------------------------------------------------
+# 3. Nginxコンテナの展開 (Application Entry)
+# -----------------------------------------------------
+# 【新規追加】Nginxイメージの事前取得とネットワーク耐障害性の確保
+# 前ステップでアドホックに引いたlatestではなく、指定のstable-alpineを安全に取得します
+- name: "Nginxコンテナイメージの事前取得（冪等性の担保）"
+  community.docker.docker_image:
+    name: "nginx"
+    tag: "stable-alpine"
+    source: pull
+    state: present
+  register: nginx_pull_result
+  until: nginx_pull_result is success
+  retries: 3
+  delay: 5
+
+- name: "Nginxコンテナの起動"
+  community.docker.docker_container:
+    name: web_server
+    image: nginx:stable-alpine
+    state: started
+    restart_policy: unless-stopped
+    # 卒業制作スペックに基づくリソース制限
+    memory: 768M
+    cpus: 0.75
+    ports:
+      - "80:80"
+    env:
+      TZ: "{{ common_timezone | default('Asia/Tokyo') }}"

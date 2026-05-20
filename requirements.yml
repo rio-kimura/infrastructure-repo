@@ -5,3 +5,6 @@ collections:
   - name: ansible.posix
   # SELinux操作(seportモジュール)に必要
   - name: community.general
+  # Ansibleの community.general.seport モジュール
+  - name: community.general
+    version: 8.6.0

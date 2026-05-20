@@ -11,14 +11,14 @@
 
     - name: "スワップファイルの生成"
       ansible.builtin.command:
-        cmd: "fallocate -l {{ common_swap_size_mb }}M /swapfile"
+        cmd: "fallocate -l {{ common_swap_size_mb | default(2048) }}M /swapfile"
       when: not swap_stat.stat.exists
       register: fallocate_result
       ignore_errors: yes
 
     - name: "スワップファイルの生成(ddフォールバック)"
       ansible.builtin.command:
-        cmd: "dd if=/dev/zero of=/swapfile bs=1M count={{ common_swap_size_mb }}"
+        cmd: "dd if=/dev/zero of=/swapfile bs=1M count={{ common_swap_size_mb | default(2048) }}"
       when: 
         - not swap_stat.stat.exists
         - (fallocate_result is failed or fallocate_result is skipped)
@@ -102,57 +102,3 @@
     name: node_exporter
     state: started
     enabled: true
-
-# -----------------------------------------------------
-# 3. セキュリティ & 通信制御 (Firewalld / SSH)
-# -----------------------------------------------------
-- name: "セキュリティパッケージのインストール"
-  ansible.builtin.dnf:
-    name:
-      - policycoreutils-python-utils
-      - firewalld
-      - python3-firewall
-    state: present
-
-- name: "Firewalld 起動と全ポート制御"
-  block:
-    - name: "SSHポート(22)をFirewalldで先行許可"
-      ansible.posix.firewalld:
-        port: "22/tcp"
-        permanent: true
-        state: enabled
-
-    - name: "Firewalld起動"
-      ansible.builtin.service:
-        name: firewalld
-        state: started
-        enabled: true
-
-    - name: "監視用ポート(9100)の解放"
-      ansible.posix.firewalld:
-        port: "9100/tcp"
-        permanent: true
-        state: enabled
-        immediate: true
-
-- name: "SELinux & SSHD 設定変更"
-  block:
-    - name: "SELinux 22番ポート許可の確認"
-      community.general.seport:
-        ports: "22"
-        proto: tcp
-        setype: ssh_port_t
-        state: present
-
-    - name: "SSHD要塞化設定（構築用安定設定）"
-      ansible.builtin.lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: "{{ item.regexp }}"
-        line: "{{ item.line }}"
-        validate: "/usr/sbin/sshd -t -f %s"
-      loop:
-        # Vagrantとの接続を維持するため、22番・パスワード許可で固定します
-        - { regexp: '^#?Port ', line: "Port 22" }
-        - { regexp: '^#?PasswordAuthentication ', line: "PasswordAuthentication yes" }
-        - { regexp: '^#?PermitRootLogin ', line: "PermitRootLogin no" }
-      notify: restart sshd
