@@ -261,7 +261,7 @@ EOF
 # 実行権限を付与して実行
 chmod +x kickoff.sh
 ./kickoff.sh
-
+```
 > ⚠️ **注意**: 最後に全台から緑色の `"ping": "pong"` が返ってくれば大成功です。
 
 #### 3️⃣ Step 3: メインPlaybookによる一括全自動インフラ構築
