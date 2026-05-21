@@ -1,4 +1,3 @@
-# roles/monitor/tasks/main.yml
 ---
 # =================================================================
 # 卒業制作 インフラ構築自動化 監視環境役割定義 (roles/monitor/tasks/main.yml)
@@ -32,8 +31,8 @@
   loop:
     - { path: '/etc/prometheus', owner: 'root', group: 'root' }
     - { path: '/var/lib/prometheus', owner: '65534', group: '65534' }  # Prometheus(nobody)専用権限
-    - { path: '/var/lib/grafana', owner: '472', group: '472' }        # Grafana専用権限
     - { path: '/var/lib/noc_reports', owner: 'root', group: 'root' }   # NOCレポート保存用
+    # 💡 危険だったホストOS側の「/var/lib/grafana」の手動作成タスクを完全に排除！
 
 # -----------------------------------------------------
 # 2. 設定ファイルの配布
@@ -61,6 +60,8 @@
     tag: "v2.51.0"
     source: pull
     state: present
+  async: 180
+  poll: 5
   register: prom_pull_result
   until: prom_pull_result is success
   retries: 3
@@ -72,6 +73,8 @@
     tag: "latest"
     source: pull
     state: present
+  async: 240
+  poll: 5
   register: graf_pull_result
   until: graf_pull_result is success
   retries: 3
@@ -96,6 +99,12 @@
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
 
+# 💡 【環境差の完全吸収】Dockerが本番・シミュレーション問わず最適な権限で管理する「名前付きボリューム」を定義
+- name: "Grafana用名前付きボリュームの作成"
+  community.docker.docker_volume:
+    name: grafana_data
+    state: present
+
 - name: "Grafana コンテナの起動"
   community.docker.docker_container:
     name: grafana
@@ -104,11 +113,12 @@
     restart_policy: unless-stopped
     ports:
       - "3000:3000"
+    # 💡 ホストOSの絶対パスではなく、名前付きボリュームをマウント。
+    # これにより、本番環境に古いデータや不適切なパーミッションがあっても完全に隔離・安全に起動します。
     volumes:
-      - /var/lib/grafana:/var/lib/grafana:Z
+      - grafana_data:/var/lib/grafana:Z
 
-# 【分離・最適化①】専用モジュールを使い、ソースコードからローカルイメージをビルド
-# ソースコード（noc_code_update）に変化があった時だけ強制再ビルドするプロの冪等性設計
+# 専用モジュールを使い、ソースコードからローカルイメージをビルド
 - name: "NOC統合コンテナイメージのローカルビルド"
   community.docker.docker_image:
     name: noc-integrated-bot
@@ -119,7 +129,7 @@
     source: build
     force_source: "{{ noc_code_update.changed }}"
 
-# 【分離・最適化②】ビルドされたイメージを安全にコンテナとして起動
+# ビルドされたイメージを安全にコンテナとして起動
 - name: "NOC統合コンテナの起動"
   community.docker.docker_container:
     name: noc-integrated-bot
