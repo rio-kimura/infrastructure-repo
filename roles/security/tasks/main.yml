@@ -25,7 +25,7 @@
 - name: "Firewalld起動後の接続再確立を待期"
   ansible.builtin.wait_for_connection:
     delay: 2
-    timeout: 60
+    timeout: 15
 
 - name: "通信ポート制御（Firewalldルールの適用）"
   block:

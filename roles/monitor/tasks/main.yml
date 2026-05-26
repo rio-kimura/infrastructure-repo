@@ -1,6 +1,6 @@
 ---
 # =================================================================
-# 卒業制作 インフラ構築自動化 監視環境役割定義 (roles/monitor/tasks/main.yml)
+# 卒業制作 インフラ構築自動化 監視環境・NOCシステム役割定義 (roles/monitor/tasks/main.yml)
 # =================================================================
 
 # -----------------------------------------------------
@@ -15,7 +15,7 @@
     - prometheus
     - grafana-server
     - discord_bot
-  failed_when: false # サービスが存在しなくてもエラーにせず進む
+  failed_when: false # 過去の遺産（古いサービス）が存在しない場合でも、エラーにせず処理を進める冪等性の担保
 
 # -----------------------------------------------------
 # 1. 永続化ディレクトリの準備
@@ -27,15 +27,17 @@
     owner: "{{ item.owner }}"
     group: "{{ item.group }}"
     mode: '0755'
-    setype: container_file_t  # AlmaLinux 9のSELinuxによるコンテナ拒否を根底から防止
+    setype: container_file_t  # 🚨重要: AlmaLinux 9の標準セキュリティ(SELinux)による、コンテナからの書き込み拒否を根本から防止
   loop:
     - { path: '/etc/prometheus', owner: 'root', group: 'root' }
-    - { path: '/var/lib/prometheus', owner: '65534', group: '65534' }  # Prometheus(nobody)専用権限
-    - { path: '/var/lib/noc_reports', owner: 'root', group: 'root' }   # NOCレポート保存用
-    # 💡 危険だったホストOS側の「/var/lib/grafana」の手動作成タスクを完全に排除！
+    - { path: '/var/lib/prometheus', owner: '65534', group: '65534' }  # Prometheusコンテナ内部の非特権ユーザー(nobody)専用のID権限
+    - { path: '/var/lib/noc_reports', owner: 'root', group: 'root' }   # Discord通知ボット用のレポート保存領域
+    # --- ↓ 新構造最適化：NOCシステム用のシンプルな永続化ディレクトリ群 ---
+    - { path: '/opt/noc-system', owner: 'root', group: 'root' }            # NOCシステムのルート
+    - { path: '/opt/noc-system/db_data', owner: 'root', group: 'root' }    # PostgreSQLコンテナの永続化領域
 
 # -----------------------------------------------------
-# 2. 設定ファイルの配布
+# 2. 設定ファイル・テンプレート・Webアプリソースコードの配布
 # -----------------------------------------------------
 - name: "Prometheus 設定ファイルの配置"
   ansible.builtin.template:
@@ -50,6 +52,23 @@
     dest: /opt/noc-integrated-bot/
     mode: '0644'
   register: noc_code_update
+
+# 💡【リファクタリングの核心】
+# バラバラに送るのをやめ、Windows側で整理した `noc_system` フォルダ(中にapp.py, Dockerfile, templates群を完備)を丸ごと一発で同期！
+# これにより、Server C上でもWindowsと全く同じ美しいツリー構造が再現され、ビルドのパスエラーが永久に消失します。
+- name: "NOCシステム Webアプリケーション資材一式（コード/Dockerfile/HTML）の構造維持配布"
+  ansible.builtin.copy:
+    src: noc_system/
+    dest: /opt/noc-system/noc_system/
+    mode: '0755'
+  register: noc_app_assets_update
+
+- name: "NOCシステム用 docker-compose.ymlの配置"
+  ansible.builtin.template:
+    src: noc_docker-compose.yml.j2
+    dest: /opt/noc-system/docker-compose.yml
+    mode: '0644'
+  register: noc_compose_update    # Composeファイルの変更を追跡
 
 # -----------------------------------------------------
 # 3. 監視・通知コンテナイメージの事前取得（耐障害性の向上）
@@ -89,17 +108,16 @@
     image: prom/prometheus:v2.51.0
     state: started
     restart_policy: unless-stopped
-    recreate: "{{ prom_config.changed }}"
+    recreate: "{{ prom_config.changed }}" # 設定ファイル(prometheus.yml)が書き換わった時だけコンテナを自動再生成する
     ports:
       - "9090:9090"  
     volumes:
-      - /etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:Z
+      - /etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:Z # :Z でSELinuxのセキュリティラベルをDockerに適合させる
       - /var/lib/prometheus:/prometheus:Z
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
 
-# 💡 【環境差の完全吸収】Dockerが本番・シミュレーション問わず最適な権限で管理する「名前付きボリューム」を定義
 - name: "Grafana用名前付きボリュームの作成"
   community.docker.docker_volume:
     name: grafana_data
@@ -113,12 +131,9 @@
     restart_policy: unless-stopped
     ports:
       - "3000:3000"
-    # 💡 ホストOSの絶対パスではなく、名前付きボリュームをマウント。
-    # これにより、本番環境に古いデータや不適切なパーミッションがあっても完全に隔離・安全に起動します。
     volumes:
-      - grafana_data:/var/lib/grafana:Z
+      - grafana_data:/var/lib/grafana:Z # ホストOSのフォルダ権限バグに左右されない、Docker管理の名前付きボリューム運用
 
-# 専用モジュールを使い、ソースコードからローカルイメージをビルド
 - name: "NOC統合コンテナイメージのローカルビルド"
   community.docker.docker_image:
     name: noc-integrated-bot
@@ -129,7 +144,6 @@
     source: build
     force_source: "{{ noc_code_update.changed }}"
 
-# ビルドされたイメージを安全にコンテナとして起動
 - name: "NOC統合コンテナの起動"
   community.docker.docker_container:
     name: noc-integrated-bot
@@ -148,14 +162,32 @@
       TZ: "Asia/Tokyo"
 
 # -----------------------------------------------------
-# 5. セキュリティ設定 (Firewalld)
+# 5. 管理者専用 マルチコンテナNOCシステムの起動準備とデプロイ (Docker Compose)
 # -----------------------------------------------------
-- name: "監視・通知サービスのポート制御"
+- name: "NOCシステム用 Nginxリバースプロキシ設定の配置"
+  ansible.builtin.template:
+    src: noc_nginx.conf.j2
+    dest: /opt/noc-system/nginx.conf
+    mode: '0644'
+  register: noc_nginx_config_update
+
+- name: "NOCダッシュボードシステム（Nginx, Analyzer, DB）の一括ビルドとバックグラウンド起動"
+  community.docker.docker_compose_v2:
+    project_src: /opt/noc-system
+    state: present
+    # 💡プロの設計: コード一式、Compose、またはNginx設定に変更があった場合、自動でリビルドして再起動する条件分岐
+    build: "{{ 'always' if (noc_compose_update.changed or noc_nginx_config_update.changed or noc_app_assets_update.changed) else 'policy' }}"
+
+# -----------------------------------------------------
+# 6. セキュリティ設定 (Firewalld)
+# -----------------------------------------------------
+- name: "監視・通知・NOC Webサービスのポート制御"
   ansible.posix.firewalld:
     port: "{{ item }}"
     permanent: true
     state: enabled
     immediate: true
   loop:
-    - "9090/tcp" # Prometheus
-    - "3000/tcp" # Grafana
+    - "9090/tcp" # 外部からのPrometheusアクセス窓口
+    - "3000/tcp" # 外部からのGrafanaアクセス窓口
+    - "8080/tcp" # ★Nginxコンテナが待ち受ける、新NOCダッシュボード用の公開WEBポート
